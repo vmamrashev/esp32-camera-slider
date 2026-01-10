@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Slider controls</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+
+        }
+
+        .container {
+            text-align: center;
+        }
+
+        .top-row {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .arrow-btn {
+            padding: 15px 25px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        .speed-block {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .speed-block label {
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        .speed-block input {
+            width: 120px;
+            padding: 8px;
+            font-size: 16px;
+            text-align: center;
+        }
+
+        .start-btn {
+            margin-top: 20px;
+            padding: 10px 30px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="top-row">
+        <button class="arrow-btn"> &#8592 Left</button>
+
+        <div class="speed-block">
+            <label for="speed">Speed</label>
+            <input type="number" id="speed" placeholder="0">
+        </div>
+
+        <button class="arrow-btn">Right &#8594 </button>
+    </div>
+
+    <button class="start-btn">Start</button>
+</div>
+
+</body>
+</html>
