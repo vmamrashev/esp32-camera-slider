@@ -8,7 +8,7 @@ const char* password = "123456789";
 
 // Motor settings
 const int STEPS_PER_REV = 2048; // For 28BYJ-48 in full step mode; adjust to 4096 for half-step if needed
-Stepper myStepper(STEPS_PER_REV, 26, 27, 14, 12); // Pins: IN1=26, IN3=27, IN2=14, IN4=12 (standard ULN2003 wiring)
+Stepper stepperMotor(STEPS_PER_REV, 26, 27, 14, 12); // Pins: IN1=26, IN3=27, IN2=14, IN4=12 (standard ULN2003 wiring)
 
 // Endstop pins
 const int ENDSTOP_LEFT = 33;
@@ -187,7 +187,7 @@ void setup() {
   Serial.println("HTTP server started");
 
   // Set initial motor speed (absolute value)
-  myStepper.setSpeed(60); // Default, but we'll control manually
+  stepperMotor.setSpeed(60); // Default, but we'll control manually
 }
 
 void loop() {
@@ -201,7 +201,7 @@ void loop() {
 
   if (isRunning && stepDelay > 0) {
     if (millis() - lastStepTime >= stepDelay) {
-      myStepper.step(direction); // Step in current direction
+      stepperMotor.step(direction); // Step in current direction
       lastStepTime = millis();
     }
   }
