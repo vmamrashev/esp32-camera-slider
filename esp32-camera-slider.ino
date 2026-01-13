@@ -1,105 +1,208 @@
 #include <WiFi.h>
+#include <WebServer.h>
 #include <Stepper.h>
 
+// WiFi settings
 const char* ssid = "ESP32-camera-slider";
-const char* key = "123456789";
+const char* password = "123456789";
 
-WiFiServer esp32Server(80);
-String request;
+// Motor settings
+const int STEPS_PER_REV = 2048; // For 28BYJ-48 in full step mode; adjust to 4096 for half-step if needed
+Stepper myStepper(STEPS_PER_REV, 26, 27, 14, 12); // Pins: IN1=26, IN3=27, IN2=14, IN4=12 (standard ULN2003 wiring)
 
-const int in1 = 19;
-const int in2 = 18;
-const int in3 = 5;
-const int in4 = 17;
-const int stepsPerRevolution = 2048;
-int stepperSpeed = 5;
-int direction = 0; // 0 for clockwise, 1 for counterclockwise
-int stepperON = 0; // 0 for off, 1 for on
+// Endstop pins
+const int ENDSTOP_LEFT = 33;
+const int ENDSTOP_RIGHT = 32;
 
-Stepper stepperMotor(stepsPerRevolution, in1, in3, in2, in4);
+// Variables
+int direction = 1; // 1 for CW, -1 for CCW
+int speedRPM = 0;
+bool isRunning = false;
+unsigned long lastStepTime = 0;
+int stepDelay = 0; // ms between steps
+
+WebServer esp32Server(80);
+
+const char* htmlPage = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Slider controls</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .container {
+            text-align: center;
+        }
+
+        .top-row {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .arrow-btn {
+            padding: 15px 25px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+        }
+
+        .arrow-btn.selected {
+            background-color: #a0a0a0;
+        }
+
+        .speed-block {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .speed-block label {
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        .speed-block input {
+            width: 120px;
+            padding: 8px;
+            font-size: 16px;
+            text-align: center;
+        }
+
+        .start-btn {
+            margin-top: 20px;
+            padding: 10px 30px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="top-row">
+        <button id="leftBtn" class="arrow-btn" onclick="selectDirection('left')"> &#8592 Left</button>
+
+        <div class="speed-block">
+            <label for="speed">Speed</label>
+            <input type="number" id="speed" placeholder="0">
+        </div>
+
+        <button id="rightBtn" class="arrow-btn" onclick="selectDirection('right')">Right &#8594 </button>
+    </div>
+
+    <button id="startBtn" class="start-btn" onclick="toggleStart()">Start</button>
+</div>
+
+<script>
+    let currentDirection = 'right'; // Default to right
+    document.getElementById('rightBtn').classList.add('selected');
+
+    function selectDirection(dir) {
+        fetch('/direction?dir=' + dir);
+        if (dir === 'left') {
+            document.getElementById('leftBtn').classList.add('selected');
+            document.getElementById('rightBtn').classList.remove('selected');
+        } else {
+            document.getElementById('rightBtn').classList.add('selected');
+            document.getElementById('leftBtn').classList.remove('selected');
+        }
+        currentDirection = dir;
+    }
+
+    function toggleStart() {
+        let btn = document.getElementById('startBtn');
+        let speed = document.getElementById('speed').value;
+        if (btn.innerText === 'Start') {
+            fetch('/start?speed=' + speed);
+            btn.innerText = 'Stop';
+        } else {
+            fetch('/stop');
+            btn.innerText = 'Start';
+        }
+    }
+</script>
+
+</body>
+</html>
+)rawliteral";
 
 void setup() {
-  stepperMotor.setSpeed(stepperSpeed);        // set the speed of the stepper motor
-  Serial.begin(115200);                       // Start the Serial communication to send messages to the computer
-  Serial.print("Setting AP (Access Point)…"); // Start the access point
-  WiFi.softAP(ssid, key);                     // WiFi.softAP(ssid); for open network
-  IPAddress IP = WiFi.softAPIP();             // Get the IP address of the ESP32
-  Serial.print("Access Point IP address: ");  
-  Serial.println(IP);                         // Print the IP address to the Serial monitor
-  esp32Server.begin();                        // Start the server
+  // Initialize serial for debugging
+  Serial.begin(115200);
+
+  // Set up endstops with internal pull-up
+  pinMode(ENDSTOP_LEFT, INPUT_PULLUP);
+  pinMode(ENDSTOP_RIGHT, INPUT_PULLUP);
+
+  // Set up WiFi AP
+  WiFi.softAP(ssid, password);
+  IPAddress myIP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(myIP);
+
+  // Web server routes
+  esp32Server.on("/", HTTP_GET, []() {
+    esp32Server.send(200, "text/html", htmlPage);
+  });
+
+  esp32Server.on("/direction", HTTP_GET, []() {
+    String dir = esp32Server.arg("dir");
+    if (dir == "left") {
+      direction = -1;
+    } else if (dir == "right") {
+      direction = 1;
+    }
+    esp32Server.send(200, "text/plain", "OK");
+  });
+
+  esp32Server.on("/start", HTTP_GET, []() {
+    String speedStr = esp32Server.arg("speed");
+    speedRPM = speedStr.toInt();
+    if (speedRPM > 0) {
+      // Calculate step delay: steps per second = (RPM / 60) * STEPS_PER_REV
+      // delay ms = 1000 / steps_per_second
+      float stepsPerSecond = (speedRPM / 60.0) * STEPS_PER_REV;
+      stepDelay = 1000 / stepsPerSecond;
+      isRunning = true;
+    }
+    esp32Server.send(200, "text/plain", "OK");
+  });
+
+  esp32Server.on("/stop", HTTP_GET, []() {
+    isRunning = false;
+    esp32Server.send(200, "text/plain", "OK");
+  });
+
+  esp32Server.begin();
+  Serial.println("HTTP server started");
+
+  // Set initial motor speed (absolute value)
+  myStepper.setSpeed(60); // Default, but we'll control manually
 }
 
-void loop(){
-  WiFiClient client = esp32Server.available(); // Listen for incoming clients
+void loop() {
+  esp32Server.handleClient();
 
-  if (client) {                                // If a new client connects,
-    Serial.println("New Client.");             // print a message out in the serial port
-    String currentLine = "";                   // a String to contain data incoming from the client
-    while (client.connected()) {               // loop while the client's connected
-      if (client.available()) {                // if there is any data to read from the client,
-        char c = client.read();                // read a char, then
-        Serial.write(c);                       // print char in the serial monitor
-        request += c;
-        if (c == '\n') {                       // if the char is a newline character
-          // if the current line is blank, that means you have two newline characters in a row.
-          // that's the end of the client's request, so send a response:
-          if (currentLine.length() == 0) {
-            // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
-            // and a content-type so the client knows what's coming, then a blank line:
-            client.println("HTTP/1.1 200 OK");
-            client.println("Content-type:text/html");
-            client.println("Connection: close");
-            client.println();
+  // Check endstops
+  if (digitalRead(ENDSTOP_LEFT) == LOW || digitalRead(ENDSTOP_RIGHT) == LOW) {
+    direction = -direction; // Reverse direction
+    delay(100); // Debounce
+  }
 
-            client.println("<!DOCTYPE html><html>");
-            client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-            client.println("<link rel=\"icon\" href=\"data:,\">");
-            // CSS to style the on/off buttons 
-            // Feel free to change the background-color and font-size attributes to fit your preferences
-            client.println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
-            client.println(".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px;");
-            client.println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
-            client.println(".button2 {background-color: #555555;}</style></head>");
-            
-            // Web Page Heading
-            client.println("<body><h1>ESP32 camera slider</h1>");
-            
-            // Display current state, and ON/OFF buttons for GPIO 26  
-            client.println("<p>GPIO 26 - State " + output26State + "</p>");
-            // If the output26State is off, it displays the ON button       
-            if (output26State=="off") {
-              client.println("<p><a href=\"/26/on\"><button class=\"button\">ON</button></a></p>");
-            } else {
-              client.println("<p><a href=\"/26/off\"><button class=\"button button2\">OFF</button></a></p>");
-            } 
-               
-            // Display current state, and ON/OFF buttons for GPIO 27  
-            client.println("<p>GPIO 27 - State " + output27State + "</p>");
-            // If the output27State is off, it displays the ON button       
-            if (output27State=="off") {
-              client.println("<p><a href=\"/27/on\"><button class=\"button\">ON</button></a></p>");
-            } else {
-              client.println("<p><a href=\"/27/off\"><button class=\"button button2\">OFF</button></a></p>");
-            }
-            client.println("</body></html>");
-            
-            // The HTTP response ends with another blank line
-            client.println();
-            // Break out of the while loop
-            break;
-          } else { // if you got a newline, then clear currentLine
-            currentLine = "";
-          }
-        } else if (c != '\r') {  // if you got anything else but a carriage return character,
-          currentLine += c;      // add it to the end of the currentLine
-        }
-      }
+  if (isRunning && stepDelay > 0) {
+    if (millis() - lastStepTime >= stepDelay) {
+      myStepper.step(direction); // Step in current direction
+      lastStepTime = millis();
     }
-    // Clear the request variable
-    request = "";
-    // Close the connection
-    client.stop();
-    Serial.println("Client disconnected.");
-    Serial.println("");
   }
 }
