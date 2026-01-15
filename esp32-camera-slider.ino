@@ -159,8 +159,10 @@ void setup() {
     String dir = esp32Server.arg("dir");
     if (dir == "left") {
       direction = -1;
+      Serial.println("direction left");
     } else if (dir == "right") {
       direction = 1;
+      Serial.println("direction right");
     }
     esp32Server.send(200, "text/plain", "OK");
   });
@@ -174,6 +176,7 @@ void setup() {
       float stepsPerSecond = (speedRPM / 60.0) * STEPS_PER_REV;
       stepDelay = 1000 / stepsPerSecond;
       isRunning = true;
+      Serial.println("Stepper motor is running.");
     }
     esp32Server.send(200, "text/plain", "OK");
   });
@@ -181,6 +184,7 @@ void setup() {
   esp32Server.on("/stop", HTTP_GET, []() {
     isRunning = false;
     esp32Server.send(200, "text/plain", "OK");
+    Serial.println("Stepper motor has been stopped.");
   });
 
   esp32Server.begin();
@@ -196,7 +200,14 @@ void loop() {
   // Check endstops
   if (digitalRead(ENDSTOP_LEFT) == LOW || digitalRead(ENDSTOP_RIGHT) == LOW) {
     direction = -direction; // Reverse direction
+    if (direction >0){
+        Serial.println("direction right");
+    }
+    else {
+        Serial.println("direction left");
+    }
     delay(100); // Debounce
+    
   }
 
   if (isRunning && stepDelay > 0) {
